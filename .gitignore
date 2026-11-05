@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Generated experiment data
+experiments/*.json
+experiments/*.csv
+
+# IDE
+.vscode/
+.idea/
