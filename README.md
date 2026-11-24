@@ -1,4 +1,31 @@
-# 🪰 FlySudoku
+# FlySudoku Arcade
+
+Open PowerShell in the repository folder and run:
+
+```powershell
+.\PLAY.cmd
+```
+
+Or double-click **PLAY.cmd**. The desktop window opens directly on 6×6 Sudoku. The four tabs keep their games in progress as you switch. Each game shows its controls and the next move on screen.
+
+| Game | How to play |
+| --- | --- |
+| 6×6 Sudoku | Fill rows, columns and 2×3 boxes with 1–6. Click a square, type a digit or use the number pad. Arrow keys move, Delete erases. Undo and Hint are available. Generated puzzles have one solution. |
+| Snakes & Ladders | Two people share the Roll die button. Follow the board from 1 to 100 and roll the exact number to finish. |
+| Bubble launch | Aim and click, or use the aim buttons and Launch. Bank shots off walls, join three matching letters and drop disconnected groups. |
+| Memory pairs | Flip two cards per turn. Find all eight matching pairs. |
+
+Requires Python 3.11+ with Tkinter. All games run offline using the Python standard library. On macOS or Linux, run `python3 arcade.py` with Tk installed.
+
+**Open learning lab** launches the original 4×4 FlySudoku experiment, including agent training, evaluation and checkpoints. Its files live in [FlySudoku_v0.1](FlySudoku_v0.1/).
+
+Run the arcade checks with `python -m unittest test_arcade -v`. They create and close a temporary Tk window and require a graphical desktop.
+
+---
+
+# Original 4×4 learning lab
+
+The following documentation applies inside `FlySudoku_v0.1`.
 
 ### An experimental journey into learning through trial and error.
 
