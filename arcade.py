@@ -1,387 +1,279 @@
-"""FlySudoku desktop arcade. Launch with python arcade.py or PLAY.cmd."""
+"""FlySudoku • an autonomous desktop experiment."""
 import math
-from pathlib import Path
 import random
-import subprocess
-import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import filedialog, messagebox
 
-from arcade_rules import CELLS, PEERS, PORTALS, attach, center, neighbors, puzzle, race_move, sockets
+from arcade_rules import PORTALS, center
+from fly_policy import Brain, NAMES
+from fly_worlds import WORLDS, Sudoku, Memory, Race, Bubbles
 
-BG, PANEL, INK, MUTED = "#121a24", "#243346", "#faf5eb", "#bbcad7"
-MINT, GOLD, CORAL = "#90edc5", "#f3cd7e", "#ffa492"
-COLORS = [MINT, GOLD, CORAL, "#a8baff"]
-
-
-def label(parent, text="", size=11, color=INK):
-    return tk.Label(parent, text=text, bg=BG, fg=color, font=("Segoe UI", size),
-                    justify="left", wraplength=680)
+BG, PANEL, LINE = "#101720", "#182632", "#324755"
+INK, MUTED, MINT, GOLD = "#eff4ef", "#b2c4cc", "#9ef1c8", "#ffcb78"
+COLORS = [MINT,GOLD,"#ec9da9","#a6b5ff"]
 
 
-def button(parent, text, command):
-    return tk.Button(parent, text=text, command=command, font=("Segoe UI", 10, "bold"),
-                     bg=PANEL, fg=INK, activebackground=MINT, activeforeground=BG,
-                     relief="flat", padx=10, pady=4, cursor="hand2")
+def text(parent, value, size=11, color=INK, bg=BG, **kw):
+    return tk.Label(parent,text=value,bg=bg,fg=color,font=("Segoe UI",size),
+                    anchor="w",justify="left",**kw)
 
 
-class Game(tk.Frame):
-    def __init__(self, parent, title, instructions):
-        super().__init__(parent, bg=BG, padx=8, pady=6)
-        label(self, title, 19, MINT).pack()
-        label(self, instructions, 10, MUTED).pack(pady=(0, 5))
-        self.board = tk.Frame(self, bg=BG)
-        self.board.pack()
-        self.tools = tk.Frame(self, bg=BG)
-        self.tools.pack(pady=5)
-        self.status = label(self, color=GOLD)
-        self.status.pack()
-
-    def action(self, text, command):
-        btn = button(self.tools, text, command)
-        btn.pack(side="left", padx=3)
-        return btn
-
-    def say(self, text):
-        self.status.config(text=text)
+def button(parent,title,cmd):
+    return tk.Button(parent,text=title,command=cmd,relief="flat",borderwidth=0,
+                     bg=LINE,fg=INK,activebackground=MINT,activeforeground=BG,
+                     font=("Segoe UI",10,"bold"),padx=9,pady=5,cursor="hand2")
 
 
-class Sudoku(Game):
-    def __init__(self, parent):
-        super().__init__(parent, "Six by six", "Fill each row, column and outlined 2 × 3 box with 1–6. Select a square, then type or tap a digit.")
-        self.cells = []
-        for i in CELLS:
-            r, c = divmod(i, 6)
-            b = button(self.board, "", lambda ix=i: self.select(ix))
-            b.config(width=3, font=("Consolas", 18, "bold"))
-            b.grid(row=r, column=c, padx=(4 if c == 3 else 1, 1), pady=(4 if r in (2,4) else 1, 1))
-            b.bind("<Key>", lambda e, ix=i: self.key(e, ix))
-            self.cells.append(b)
-        keys = tk.Frame(self, bg=BG)
-        keys.pack(before=self.tools, pady=3)
-        for digit in range(1, 7):
-            button(keys, str(digit), lambda v=digit: self.put(v)).pack(side="left", padx=2)
-        self.level = ttk.Combobox(self.tools, values=["Easy", "Standard", "Challenge"], width=10, state="readonly")
-        self.level.set("Standard")
-        self.level.pack(side="left")
-        self.level.bind("<<ComboboxSelected>>", lambda _: self.reset())
-        self.action("New puzzle", self.reset)
-        self.action("Undo", self.undo)
-        self.action("Erase", lambda: self.put(0))
-        self.action("Hint", self.hint)
-        self.reset()
+def fly_sprite(cv,x,y,phase):
+    flap = 3*math.sin(phase)
+    for sign in (-1,1):
+        for dy in (-4,0,4):
+            cv.create_line(x+sign*3,y+dy,x+sign*9,y+dy+3,fill="#e6c792",tags="fly")
+        cv.create_oval(x+sign*3-7,y-8-flap,x+sign*9+6,y+2,fill="#c3e8db",outline="#578176",tags="fly")
+    cv.create_oval(x-4,y-4,x+4,y+9,fill="#273632",outline=GOLD,tags="fly")
+    cv.create_oval(x-5,y-7,x+5,y-1,fill="#dc8e65",outline=BG,tags="fly")
 
-    def reset(self):
-        self.fixed, self.solution = puzzle({"Easy":14,"Standard":20,"Challenge":24}[self.level.get()])
-        self.values = self.fixed.copy()
-        self.history = []
-        self.select(self.values.index(0))
 
-    def select(self, i):
-        self.index = i
-        self.cells[i].focus_set()
+class Lab:
+    def __init__(self,root,rng=None):
+        self.root = root
+        self.rng = rng or random.Random()
+        self.brain = Brain()
+        self.training = True
+        self.running = True
+        self.speed = tk.StringVar(root,value="Watch")
+        self.xy = (184,150)
+        self.target = self.xy
+        self.frame = 0
+        self.tick_id = self.animation_id = None
+        self.shot_progress = 1
+        root.title("FlySudoku · Flight Lab")
+        root.configure(bg=BG)
+        root.minsize(710,530)
+        head = tk.Frame(root,bg=BG,padx=15,pady=6)
+        head.pack(fill="x")
+        text(head,"Flight Lab",22,MINT).pack(side="left")
+        self.badge = text(head,"AUTONOMOUS  /  TRAINING",10,GOLD)
+        self.badge.pack(side="right")
+        body = tk.Frame(root,bg=BG)
+        body.pack(fill="both",expand=True,padx=14)
+        rail = tk.Frame(body,bg=PANEL,padx=12,pady=10)
+        rail.pack(side="left",fill="y",padx=(0,12))
+        text(rail,"Choose a game",14,bg=PANEL).pack(anchor="w",pady=(0,6))
+        self.choices = {}
+        for name in NAMES:
+            b = button(rail,name,lambda n=name:self.select(n))
+            b.pack(fill="x",pady=2)
+            self.choices[name] = b
+        text(rail,"Experiment",14,bg=PANEL).pack(anchor="w",pady=(14,4))
+        self.pause = button(rail,"Pause",self.toggle)
+        self.pause.pack(fill="x",pady=2)
+        self.mode = button(rail,"Evaluate policy",self.switch_mode)
+        self.mode.pack(fill="x",pady=2)
+        for title,cmd in [("Save result…",self.save),("Load result…",self.load)]:
+            button(rail,title,cmd).pack(fill="x",pady=2)
+        tk.OptionMenu(rail,self.speed,"Watch","Fast","Slow").pack(fill="x",pady=5)
+        self.caption = text(rail,"",10,MUTED,PANEL,wraplength=190)
+        self.caption.pack(anchor="w",pady=5)
+        stage = tk.Frame(body,bg=BG)
+        stage.pack(fill="both",expand=True)
+        self.heading = text(stage,"",18)
+        self.heading.pack(anchor="w")
+        self.cv = tk.Canvas(stage,width=380,height=332,bg=PANEL,highlightthickness=1,highlightbackground=LINE)
+        self.cv.pack(fill="x")
+        self.status = text(stage,"",11,GOLD,wraplength=460)
+        self.status.pack(anchor="w",pady=(6,1))
+        self.metrics = text(stage,"",10,MUTED,wraplength=465)
+        self.metrics.pack(anchor="w")
+        self.feedback = text(stage,"",10,MINT,wraplength=465)
+        self.feedback.pack(anchor="w",pady=2)
+        self.cv.bind("<Configure>",lambda e:self.draw() if hasattr(self,"world") else None)
+        self.select(NAMES[0])
+        self.animate()
+        root.protocol("WM_DELETE_WINDOW",self.close)
+
+    def select(self,name):
+        self.game = name
+        for n,b in self.choices.items():
+            b.config(bg=MINT if n==name else LINE,fg=BG if n==name else INK)
+        self.heading.config(text=name + ("  /  6 × 6" if name=="Sudoku" else ""))
+        self.caption.config(text={"Sudoku":"The fly tries digits, keeps accepted moves and learns which candidate groups pay off.",
+            "Memory pairs":"The fly remembers revealed cards and learns which kinds of flips earn rewards.",
+            "Bubble launch":"The fly tests aim angles and learns from the bubbles each shot clears.",
+            "Snakes & Ladders":"Two flies race automatically. Every turn is a die roll, so this game records outcomes only."}[name])
+        self.start_round()
+        self.schedule()
+
+    def start_round(self):
+        self.world = WORLDS[self.game](self.rng)
+        self.moves = self.reward = 0
+        self.finished = False
+        self.shot_progress = 1
+        self.status.config(text="Observing a fresh board…")
+        self.feedback.config(text="The next action is chosen automatically.")
+        self.target = (self.cv.winfo_width()/2,145)
         self.draw()
+        self.stats()
 
-    def key(self, event, i):
-        self.index = i
-        if event.char and event.char in "123456":
-            self.put(int(event.char))
-        elif event.keysym in ("BackSpace", "Delete"):
-            self.put(0)
-        elif event.keysym in ("Up","Down","Left","Right"):
-            step = {"Up":-6,"Down":6,"Left":-1,"Right":1}[event.keysym]
-            self.select((i + step) % 36)
+    def stats(self):
+        records = self.brain.results[self.game]
+        phase = [r for r in records if r["training"]==self.training]
+        wins = sum(r["won"] for r in phase)
+        outcome = "fly 1 wins" if self.game=="Snakes & Ladders" else "wins"
+        self.metrics.config(text=f"{self.moves} moves · round reward {self.reward:+d}   |   {len(phase)} completed · {wins} {outcome} in this mode")
 
-    def put(self, value):
-        i = self.index
-        if self.fixed[i]:
-            self.say("Printed clue. Choose an empty or mint square.")
+    def schedule(self):
+        if self.tick_id is not None:
+            self.root.after_cancel(self.tick_id)
+            self.tick_id = None
+        if self.running:
+            delay = {"Fast":65,"Watch":700,"Slow":1500}[self.speed.get()]
+            self.tick_id = self.root.after(delay,self.step)
+
+    def step(self):
+        self.tick_id = None
+        if not self.running:
             return
-        if self.values[i] != value:
-            self.history.append((i, self.values[i]))
-            self.values[i] = value
-        self.select(i)
-
-    def undo(self):
-        if self.history:
-            i, old = self.history.pop()
-            self.values[i] = old
-            self.select(i)
-
-    def hint(self):
-        wrong = [i for i in CELLS if self.values[i] != self.solution[i]]
-        if wrong:
-            self.index = self.index if self.index in wrong else wrong[0]
-            self.put(self.solution[self.index])
-
-    def draw(self):
-        conflicts = {i for i in CELLS if self.values[i] and any(self.values[j] == self.values[i] for j in PEERS[i])}
-        for i, b in enumerate(self.cells):
-            bg = "#65413c" if i in conflicts else "#40554c" if i == self.index else PANEL
-            b.config(text=self.values[i] or " ", fg=INK if self.fixed[i] else MINT, bg=bg,
-                     highlightthickness=1, highlightbackground=GOLD if i == self.index else bg)
-        if self.values == self.solution:
-            self.say("Solved! Choose New puzzle to play again.")
-        elif conflicts:
-            self.say("Repeated digits highlighted. Check the row, column and box.")
+        if self.finished:
+            self.start_round()
         else:
-            self.say(f"Row {self.index//6+1}, column {self.index%6+1}   ·   {self.values.count(0)} squares left")
-
-
-class Race(Game):
-    def __init__(self, parent):
-        super().__init__(parent, "Snakes & Ladders", "Two players share the die. Climb mint ladders, slide down coral snakes. Land exactly on 100 to win.")
-        self.canvas = tk.Canvas(self.board, width=340, height=340, bg=BG, highlightthickness=0)
-        self.canvas.pack()
-        self.roll_button = self.action("Roll die", self.roll)
-        self.action("New race", self.reset)
-        self.reset()
-
-    @staticmethod
-    def point(n):
-        r, c = divmod(n-1, 10)
-        return (9-c if r%2 else c)*34+17, (9-r)*34+17
-
-    def reset(self):
-        self.pos = [0,0]
-        self.turn = 0
-        self.roll_button.config(state="normal")
-        self.say("Player 1 rolls first. Both players start off the board.")
-        self.draw()
-
-    def roll(self):
-        p = self.turn
-        if 100 in self.pos:
-            return
-        die = random.randint(1,6)
-        old = self.pos[p]
-        landing, end = race_move(old, die)
-        self.pos[p] = end
-        text = f"P{p+1} rolled {die}. "
-        if old+die > 100:
-            text += f"Overshoot — stay on {old}."
-        elif landing != end:
-            text += f"{'Ladder' if end > landing else 'Snake'} from {landing} to {end}."
-        else:
-            text += f"Landed on {end}."
-        self.turn = 1-p
-        self.say(text + (f" Player {p+1} wins!" if end == 100 else f" Player {self.turn+1} rolls next."))
-        if end == 100:
-            self.roll_button.config(state="disabled")
-        self.draw()
-
-    def draw(self):
-        cv = self.canvas
-        cv.delete("all")
-        for n in range(1,101):
-            x,y = self.point(n)
-            cv.create_rectangle(x-16,y-16,x+16,y+16,fill=PANEL if n%2 else "#304256",width=0)
-        for a,b in PORTALS.items():
-            x,y = self.point(a)
-            u,v = self.point(b)
-            if b>a:
-                dx,dy = u-x,v-y
-                length = math.hypot(dx,dy)
-                ox,oy = -3*dy/length,3*dx/length
-                for sign in (-1,1):
-                    cv.create_line(x+sign*ox,y+sign*oy,u+sign*ox,v+sign*oy,fill=MINT)
-                for k in range(1,9):
-                    px,py = x+dx*k/9,y+dy*k/9
-                    cv.create_line(px-ox,py-oy,px+ox,py+oy,fill=MINT)
+            action,key = self.brain.choose(self.game,self.world.actions(),self.rng,self.training)
+            reward,ended,won,info = self.world.move(action)
+            self.moves += 1
+            self.reward += reward
+            trainable = self.game!="Snakes & Ladders"
+            if self.training and trainable:
+                self.brain.learn(self.game,key,reward)
+            self.finished = ended or self.moves>=500
+            if self.finished:
+                self.brain.results[self.game].append(dict(moves=self.moves,won=bool(ended and won),training=self.training))
+            self.status.config(text=info + ("   ·   Round complete" if self.finished else ""))
+            if trainable:
+                visits,mean = self.brain.values[self.game].get(key,[0,0])
+                self.feedback.config(text=f"{key}  /  reward {reward:+d}  /  learned mean {mean:+.2f} from {visits} trials")
             else:
-                cv.create_line(x,y,(x+u)/2+18,(y+v)/2,u,v,smooth=True,fill=CORAL,width=3,arrow="last")
-        for n in range(1,101):
-            x,y = self.point(n)
-            cv.create_text(x-8,y-9,text=str(n),fill=INK,font=("Consolas",8,"bold"))
-        for p,n in enumerate(self.pos):
-            if n:
-                x,y = self.point(n)
-                x += -6 if p==0 else 7
-                cv.create_oval(x-7,y-6,x+7,y+8,fill=(GOLD,MINT)[p],outline=BG)
-                cv.create_text(x,y+1,text=str(p+1),font=("Arial",8,"bold"))
-
-
-class Memory(Game):
-    def __init__(self, parent):
-        super().__init__(parent,"Memory pairs","Flip two cards. Match all eight pairs in as few turns as you can.")
-        self.cards = []
-        self.timer = None
-        for i in range(16):
-            b = button(self.board,"?",lambda ix=i:self.flip(ix))
-            b.config(width=5,height=2,font=("Segoe UI",16,"bold"))
-            b.grid(row=i//4,column=i%4,padx=3,pady=3)
-            self.cards.append(b)
-        self.action("Shuffle & restart", self.reset)
-        self.reset()
-
-    def reset(self):
-        if self.timer is not None:
-            self.after_cancel(self.timer)
-        self.timer = None
-        self.deck = ["Sun","Moon","Leaf","Star","Rain","Snow","Sky","Sea"]*2
-        random.shuffle(self.deck)
-        self.flipped = []
-        self.matched = set()
-        self.turns = 0
-        for b in self.cards:
-            b.config(text="?",bg=PANEL,fg=INK)
-        self.say("Pick your first card.")
-
-    def flip(self, i):
-        if self.timer or i in self.flipped or i in self.matched:
-            return
-        self.cards[i].config(text=self.deck[i],bg=GOLD,fg=BG)
-        self.flipped.append(i)
-        if len(self.flipped)==1:
-            self.say("Pick its partner.")
-            return
-        self.turns += 1
-        a,b = self.flipped
-        if self.deck[a] == self.deck[b]:
-            self.matched.update((a,b))
-            for j in self.flipped:
-                self.cards[j].config(bg=MINT)
-            self.flipped.clear()
-            self.say(f"{len(self.matched)//2}/8 pairs · {self.turns} turns" if len(self.matched)<16 else f"All pairs found in {self.turns} turns!")
-        else:
-            self.say("Different cards. Remember their places.")
-            self.timer = self.after(850,self.hide_pair)
-
-    def hide_pair(self):
-        for j in self.flipped:
-            self.cards[j].config(text="?",bg=PANEL,fg=INK)
-        self.flipped.clear()
-        self.timer = None
-
-
-class Bubbles(Game):
-    def __init__(self, parent):
-        super().__init__(parent,"Bubble launch","Aim and click, or use ← → and Space. Match 3 touching symbols. Clear the ceiling before a bubble reaches the line.")
-        self.canvas = tk.Canvas(self.board,width=320,height=340,bg="#192334",highlightthickness=0,takefocus=True)
-        self.canvas.pack()
-        self.canvas.bind("<Motion>", self.aim)
-        self.canvas.bind("<Button-1>", self.click)
-        self.canvas.bind("<Left>", lambda _:self.rotate(-.1))
-        self.canvas.bind("<Right>", lambda _:self.rotate(.1))
-        self.canvas.bind("<space>", lambda _:self.fire())
-        self.action("Aim left",lambda:self.rotate(-.12))
-        self.action("Launch",self.fire)
-        self.action("Aim right",lambda:self.rotate(.12))
-        self.action("New field",self.reset)
-        self.timer = None
-        self.reset()
-
-    def reset(self):
-        if self.timer is not None:
-            self.after_cancel(self.timer)
-        self.timer = None
-        self.field = {(r,c):random.randrange(4) for r in range(4) for c in sockets(r)}
-        self.shot = None
-        self.angle = 0
-        self.color = random.choice(list(self.field.values()))
-        self.score = 0
-        self.over = False
-        self.say("Aim at a matching group. The walls bounce your shot.")
-        self.draw()
-
-    def rotate(self, delta):
-        self.angle = max(-1.25,min(1.25,self.angle+delta))
-        self.draw()
-
-    def aim(self,event):
-        if event.y < 316:
-            self.angle = max(-1.25,min(1.25,math.atan2(event.x-160,318-event.y)))
+                self.feedback.config(text="Chance simulation · no policy update")
+            self.shot_progress = 0 if isinstance(self.world,Bubbles) and action is not None else 1
             self.draw()
+            self.stats()
+        self.schedule()
 
-    def click(self,event):
-        self.canvas.focus_set()
-        self.aim(event)
-        if event.y<316:
-            self.fire()
+    def toggle(self):
+        self.running = not self.running
+        self.pause.config(text="Pause" if self.running else "Resume")
+        self.schedule()
 
-    def fire(self):
-        if self.shot or self.over:
-            return
-        self.shot = [160,318,math.sin(self.angle)*6,-math.cos(self.angle)*6]
-        self.tick()
+    def switch_mode(self):
+        self.training = not self.training
+        self.badge.config(text="AUTONOMOUS  /  "+("TRAINING" if self.training else "EVALUATION"))
+        self.mode.config(text="Evaluate policy" if self.training else "Train fly")
+        self.start_round()
+        self.schedule()
 
-    def tick(self):
-        self.timer = None
-        x,y,vx,vy = self.shot
-        x += vx
-        y += vy
-        if x<16 or x>304:
-            x = min(304,max(16,x))
-            vx = -vx
-        hits = [p for p in self.field if math.dist(center(p),(x,y))<=31]
-        if hits or y<=16:
-            candidates = {q for p in hits for q in neighbors(p) if q not in self.field}
-            if y<=16:
-                candidates.update((0,c) for c in sockets(0) if (0,c) not in self.field)
-            if candidates:
-                socket = min(candidates,key=lambda q:math.dist(center(q),(x,y)))
-                self.score += attach(self.field,socket,self.color)
-            self.shot = None
-            self.over = not candidates or not self.field or any(center(p)[1]+15>=286 for p in self.field)
-            if not self.field:
-                self.say(f"Field cleared! {self.score} bubbles removed.")
-            elif self.over:
-                self.say(f"Field full. {self.score} bubbles removed. Select New field.")
-            else:
-                self.color = random.choice(list(self.field.values()))
-                self.say(f"{self.score} bubbles removed. Aim your next shot.")
+    def save(self):
+        path = filedialog.asksaveasfilename(defaultextension=".json",filetypes=[("Fly result","*.json")])
+        if path:
+            try:
+                self.brain.save(path)
+                self.feedback.config(text="Saved learned action values and completed round results.")
+            except OSError as err:
+                messagebox.showerror("Could not save",str(err))
+
+    def load(self):
+        path = filedialog.askopenfilename(filetypes=[("Fly result","*.json")])
+        if path:
+            try:
+                brain = Brain.load(path)
+            except (OSError,ValueError,OverflowError) as err:
+                messagebox.showerror("Could not load",str(err))
+                return
+            self.brain = brain
+            self.training = True
+            self.switch_mode()
+            self.feedback.config(text="Loaded result. Evaluating the saved policy on a fresh board.")
+
+    def draw(self):
+        cv,w = self.cv,self.world
+        cv.delete("all")
+        ox = (max(380,cv.winfo_width())-320)/2
+        if isinstance(w,Sudoku):
+            for i,value in enumerate(w.board):
+                r,c = divmod(i,6)
+                x,y = ox+c*52,10+r*52
+                cv.create_rectangle(x,y,x+50,y+50,fill="#385449" if self.moves and i==w.focus else "#243442",outline="")
+                if value:
+                    cv.create_text(x+25,y+25,text=value,font=("Consolas",21,"bold"),fill=INK if w.givens[i] else MINT)
+                if i==w.focus:
+                    self.target = (x+40,y+12)
+            for k in (2,4):
+                cv.create_line(ox,9+52*k,ox+311,9+52*k,fill=GOLD,width=2)
+            cv.create_line(ox+155,10,ox+155,321,fill=GOLD,width=2)
+        elif isinstance(w,Memory):
+            for i in range(16):
+                r,c = divmod(i,4)
+                x,y = ox+c*80,10+r*78
+                visible = i in w.show or i in w.matched
+                cv.create_rectangle(x,y,x+74,y+70,fill="#315449" if i in w.matched else LINE,outline="")
+                cv.create_text(x+37,y+35,text=w.deck[i] if visible else "·",fill=MINT if visible else MUTED,font=("Georgia",24))
+                if i==w.focus:
+                    self.target = (x+60,y+16)
+        elif isinstance(w,Race):
+            def pos(n):
+                r,c = divmod(max(1,n)-1,10)
+                return ox+(9-c if r%2 else c)*32+16,16+(9-r)*32
+            for n in range(1,101):
+                x,y = pos(n)
+                cv.create_rectangle(x-15,y-15,x+15,y+15,fill=LINE,outline="")
+            for a,b in PORTALS.items():
+                cv.create_line(*pos(a),*pos(b),fill=MINT if b>a else COLORS[2],width=2,arrow="last")
+            for n in range(1,101):
+                x,y = pos(n)
+                cv.create_text(x-6,y-6,text=n,font=("Consolas",8),fill=INK)
+            for p,n in enumerate(w.pos):
+                if n:
+                    x,y = pos(n)
+                    cv.create_text(x-5+11*p,y+4,text=str(p+1),fill=COLORS[p],font=("Consolas",13,"bold"))
+            self.target = pos(w.focus)
         else:
-            self.shot = [x,y,vx,vy]
-            self.timer = self.after(12,self.tick)
-        self.draw()
+            active = self.shot_progress<1 and bool(w.path)
+            board = w.before if active else w.board
+            for q,color in board.items():
+                x,y = center(q)
+                self.orb(ox+x,y,color)
+            cv.create_line(ox,286,ox+320,286,dash=(4,5),fill=COLORS[2])
+            cv.create_polygon(ox+145,325,ox+175,325,ox+160,294,fill=MUTED)
+            if active:
+                x,y = w.path[min(len(w.path)-1,int(self.shot_progress*len(w.path)))]
+                self.orb(ox+x,y,w.last_color)
+            else:
+                self.orb(ox+160,316,w.color)
+            self.target = (ox+w.focus[0],w.focus[1])
+        fly_sprite(cv,*self.xy,self.frame*.32)
 
     def orb(self,x,y,color):
-        self.canvas.create_oval(x-14,y-14,x+14,y+14,fill=COLORS[color],outline="#dce6ea")
-        self.canvas.create_text(x,y,text="ABCD"[color],fill=BG,font=("Consolas",12,"bold"))
+        self.cv.create_oval(x-14,y-14,x+14,y+14,fill=COLORS[color],outline=BG)
+        self.cv.create_text(x,y,text="ABCD"[color],fill=BG,font=("Consolas",11,"bold"))
 
-    def draw(self):
-        cv = self.canvas
-        cv.delete("all")
-        cv.create_line(0,286,320,286,fill=CORAL,dash=(5,5))
-        for p,color in self.field.items():
-            self.orb(*center(p),color)
-        if not self.over:
-            cv.create_line(160,318,160+math.sin(self.angle)*55,318-math.cos(self.angle)*55,fill=INK,width=3,arrow="last")
-            x,y = self.shot[:2] if self.shot else (160,318)
-            self.orb(x,y,self.color)
+    def animate(self):
+        if self.running:
+            self.frame += 1
+            self.xy = tuple(v+(t-v)*.24 for v,t in zip(self.xy,self.target))
+            if self.shot_progress<1:
+                self.shot_progress = min(1,self.shot_progress+.09)
+                self.draw()
+            else:
+                self.cv.delete("fly")
+                fly_sprite(self.cv,*self.xy,self.frame*.32)
+        self.animation_id = self.root.after(32,self.animate)
 
-
-def learning_lab():
-    lab = Path(__file__).resolve().parent / "FlySudoku_v0.1"
-    if not (lab/"flysudoku"/"__main__.py").is_file():
-        messagebox.showerror("Learning lab","Extract or clone the entire repository to include the learning lab.")
-        return
-    subprocess.Popen([sys.executable,"-m","flysudoku"],cwd=lab)
-
-
-def build(root):
-    root.title("FlySudoku Arcade")
-    root.configure(bg=BG)
-    root.minsize(630,540)
-    header = tk.Frame(root,bg=BG,padx=16,pady=6)
-    header.pack(fill="x")
-    label(header,"FlySudoku Arcade",16).pack(side="left")
-    button(header,"Open learning lab",learning_lab).pack(side="right")
-    style = ttk.Style(root)
-    style.theme_use("clam")
-    style.configure("TNotebook",background=BG,borderwidth=0)
-    style.configure("TNotebook.Tab",padding=(13,7),background=PANEL,foreground=INK)
-    style.map("TNotebook.Tab",background=[("selected",MINT)],foreground=[("selected",BG)])
-    tabs = ttk.Notebook(root)
-    tabs.pack(fill="both",expand=True,padx=8,pady=4)
-    games = [Sudoku(tabs),Race(tabs),Bubbles(tabs),Memory(tabs)]
-    for game,title in zip(games,["6×6 Sudoku","Snakes & Ladders","Bubble launch","Memory pairs"]):
-        tabs.add(game,text=title)
-    tabs.select(0)
-    return games
+    def close(self):
+        for timer in (self.tick_id,self.animation_id):
+            if timer is not None:
+                self.root.after_cancel(timer)
+        self.root.destroy()
 
 
 if __name__ == "__main__":
     window = tk.Tk()
-    build(window)
+    Lab(window)
     window.mainloop()
