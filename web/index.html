@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f5ee">
+  <title>Flight Lab · FlySudoku</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="engine.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header><div class="wrap mast"><a class="brand" href="./index.html"><span class="brandmark" aria-hidden="true">✣</span> FlySudoku</a><a class="source" href="https://github.com/Vikasyadav12960/FlySudoku">GitHub ↗</a></div></header>
+  <main class="wrap">
+    <div class="intro"><div><h1>Flight Lab<span>.</span></h1><p>Watch a fly learn its next move.</p></div><canvas id="specimen" width="250" height="136" aria-hidden="true"></canvas></div>
+    <nav id="games" aria-label="Simulation environment"></nav>
+    <div class="layout">
+      <section class="arena" aria-labelledby="title">
+        <div class="panelhead"><h2 id="title">6×6 Sudoku</h2><span id="state" class="status">Training</span></div>
+        <div class="field"><canvas id="board" width="720" height="720" role="img" aria-label="Sudoku board"></canvas></div>
+        <div class="controls"><button id="play">Ⅱ &nbsp;Pause</button><button id="step">Step →</button><label>Speed <select id="speed"><option value="1050">1×</option><option value="525">2×</option><option value="210">5×</option><option value="70">15×</option></select></label></div>
+      </section>
+      <aside>
+        <section class="instrument"><h2>Agent controls</h2><label class="fieldlabel" for="mode">Policy mode</label><select id="mode"><option value="train">Train policy</option><option value="evaluate">Evaluate policy</option></select><p class="hint" id="modeHint"></p>
+          <dl><div><dt>Moves this round</dt><dd id="moves">0</dd></div><div><dt>Rounds finished</dt><dd id="rounds">0</dd></div><div><dt>Last reward</dt><dd id="reward">—</dd></div></dl>
+          <button id="restart">Start fresh round ↻</button>
+        </section>
+        <section class="log"><h2>Flight recorder</h2><ol id="events"></ol></section>
+        <section class="files"><h2>Training results</h2><div><button id="save">↓ Save JSON</button><button id="load">↑ Load JSON</button></div><input id="file" type="file" accept=".json,application/json" hidden><p id="feedback" role="status"></p></section>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>
