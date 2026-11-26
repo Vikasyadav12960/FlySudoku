@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-where py >nul 2>nul
+py -3 -c "import sys, tkinter; sys.exit(sys.version_info < (3, 11))" >nul 2>nul
 if errorlevel 1 goto usepython
 py -3 arcade.py
 goto result
@@ -13,3 +13,4 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+
